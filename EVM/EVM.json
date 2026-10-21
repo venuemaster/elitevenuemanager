@@ -1,6 +1,7 @@
 {
   "Author": "EVM",
   "Name": "Elite Venue Manager",
+  "IconUrl": "https://raw.githubusercontent.com/gfimbres1307-debug/elitevenuemanager/main/evm_icon.png",
   "Punchline": "Run your FFXIV venue: guests, bar orders, song requests, shouts.",
   "Description": "Register your venue's housing plot and see everyone who comes in (first-timers, visit counts, tonight's log). Send an automatic welcome /tell, rotate timed shouts about your games and events, take drink orders with !order and !menu, collect song requests with !song and mark them queued/played, and get a warning before your Party Finder listing expires. Open with /venue or /evm.",
   "Tags": [ "venue", "bar", "guests", "song requests", "party finder", "host", "event" ],
