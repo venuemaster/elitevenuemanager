@@ -87,7 +87,7 @@ public class VenueManager
     public VenueManager(Plugin plugin) => this.plugin = plugin;
 
     public string Fill(string t, string name = "", int visits = 0, string item = "", string song = "", string menu = "")
-        => t.Replace("{venue}", Config.VenueName).Replace("{name}", name).Replace("{visits}", visits.ToString())
+        => t.Replace("{venue}", Config.VenueName).Replace("{link}", Config.MenuLink.Trim()).Replace("{name}", name).Replace("{visits}", visits.ToString())
             .Replace("{item}", item).Replace("{song}", song).Replace("{menu}", menu);
 
     // ======================= housing =======================
@@ -318,7 +318,7 @@ public class VenueManager
 
         if (Config.OrdersEnabled && TryCommand(text, Config.MenuCommand, out _))
         {
-            plugin.SendLine($"/tell {Target(name, world)} {Fill(Config.MenuShout, name, menu: MenuText())}");
+            plugin.SendLine($"/tell {Target(name, world)} {MenuMessage(name)}");
             return;
         }
 
@@ -366,6 +366,10 @@ public class VenueManager
                 d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
         return d[a.Length, b.Length];
     }
+
+    /// <summary>The menu link message if a link is set, otherwise the drinks listed out.</summary>
+    public string MenuMessage(string name = "")
+        => Config.MenuLink.Trim().Length > 0 ? Fill(Config.MenuLinkMessage, name) : Fill(Config.MenuShout, name, menu: MenuText());
 
     public string MenuText()
         => string.Join(" | ", Config.Menu.Where(m => !m.OutOfStock).Select(m => m.Price > 0 ? $"{m.Name} {ShortGil(m.Price)}" : m.Name))

@@ -137,8 +137,14 @@ public class VenueWindow : Window
     {
         var on = Config.OrdersEnabled;
         if (ImGui.Checkbox($"Take orders: guests type {Config.OrderCommand} <drink>   ({Config.MenuCommand} sends them the menu)", ref on)) { Config.OrdersEnabled = on; Save(); }
-        if (ImGui.Button("Shout the menu"))
-            plugin.Announce(V.Fill(Config.MenuShout, menu: V.MenuText()));
+        ImGui.SetNextItemWidth(-200);
+        var link = Config.MenuLink;
+        if (ImGui.InputTextWithHint("##menulink", "Paste your menu link here (Carrd, Imgur, Google Doc...)", ref link, 300)) { Config.MenuLink = link.Trim(); Save(); }
+        ImGui.SameLine();
+        if (ImGui.Button("Shout the menu")) plugin.Announce(V.MenuMessage());
+        ImGui.TextColored(Grey, Config.MenuLink.Length > 0
+            ? $"{Config.MenuCommand} and \"Shout the menu\" send: {Chat.Clean(V.MenuMessage("Name"))}"
+            : $"No link yet - {Config.MenuCommand} lists the drinks from your menu below.");
 
         ImGui.Separator();
         var waiting = V.Orders.Where(o => o.Status == OrderStatus.Waiting).ToList();
@@ -226,7 +232,8 @@ public class VenueWindow : Window
             if (ImGui.Checkbox("Send a /tell when an order comes in", ref r)) { Config.OrderReplyTell = r; Save(); }
             Text("Order reply  {name} {item}", Config.OrderReply, v => Config.OrderReply = v);
             Text("Serve line (any chat command, e.g. /em or /say)  {name} {item}", Config.ServeLine, v => Config.ServeLine = v);
-            Text("Menu message  {menu}", Config.MenuShout, v => Config.MenuShout = v);
+            Text("Menu link message  {link} {venue}", Config.MenuLinkMessage, v => Config.MenuLinkMessage = v);
+            Text("Menu message when there's no link  {menu}", Config.MenuShout, v => Config.MenuShout = v);
         }
     }
 

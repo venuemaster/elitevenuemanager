@@ -49,7 +49,7 @@ public class VenueConfig
     public bool WelcomeEnabled { get; set; } = false;
     public int WelcomeDelaySeconds { get; set; } = 5;
     public int WelcomeCooldownHours { get; set; } = 12;
-    public string WelcomeNew { get; set; } = "Welcome to {venue}, {name}! Grab a drink -- type !menu for drinks or !song to request a song.";
+    public string WelcomeNew { get; set; } = "Welcome to {venue}, {name}! Grab a drink -- type !menu for the menu or !song to request a song.";
     public string WelcomeBack { get; set; } = "Welcome back to {venue}, {name}! Visit #{visits} -- good to see you again.";
     public string NoTellNames { get; set; } = string.Empty;   // comma separated: staff, friends
 
@@ -74,6 +74,9 @@ public class VenueConfig
     public string OrderReply { get; set; } = "Got your order for {item}, {name}! The bartender is on it.";
     public string ServeLine { get; set; } = "/em slides a {item} across the bar to {name}.";
     public string MenuShout { get; set; } = "{venue} MENU: {menu}";
+    /// <summary>Paste a link to your menu (Carrd, Imgur, Google Doc...). When set, !menu and "Shout the menu" send the link instead of listing drinks.</summary>
+    public string MenuLink { get; set; } = string.Empty;
+    public string MenuLinkMessage { get; set; } = "Check out the {venue} menu: {link} -- order with !order <drink>";
     public List<DrinkItem> Menu { get; set; } = new()
     {
         new() { Name = "House Special", Price = 100_000, Description = "Ask the bartender" },
