@@ -14,6 +14,7 @@ public class ChatQueue
     {
         public string Line = string.Empty;
         public Action? After;
+        public Action? Before;
         public object? Owner;
         public int Retries;
     }
@@ -34,8 +35,8 @@ public class ChatQueue
 
     public int Pending => items.Count;
 
-    public void Enqueue(string line, Action? after = null, object? owner = null)
-        => items.AddLast(new Item { Line = line, After = after, Owner = owner });
+    public void Enqueue(string line, Action? after = null, object? owner = null, Action? before = null)
+        => items.AddLast(new Item { Line = line, After = after, Owner = owner, Before = before });
 
     /// <summary>Drops every queued line that belongs to <paramref name="owner"/> (e.g. a cancelled countdown).</summary>
     public void Remove(object owner)
@@ -61,7 +62,7 @@ public class ChatQueue
         nextAllowed = DateTime.Now.AddSeconds(wait);
         if (lastItem == null || (DateTime.Now - lastSentAt).TotalSeconds > 5) return;
         if (lastItem.Retries >= 3) { lastItem = null; return; }
-        items.AddFirst(new Item { Line = lastItem.Line, Owner = lastItem.Owner, Retries = lastItem.Retries + 1 });
+        items.AddFirst(new Item { Line = lastItem.Line, Owner = lastItem.Owner, Before = lastItem.Before, Retries = lastItem.Retries + 1 });
         lastItem = null;
     }
 
@@ -70,6 +71,8 @@ public class ChatQueue
         if (items.Count == 0 || DateTime.Now < nextAllowed) return;
         var item = items.First!.Value;
         items.RemoveFirst();
+        try { item.Before?.Invoke(); }
+        catch (Exception ex) { Plugin.Log.Error(ex, "Chat queue pre-send step failed"); }
         var sent = Chat.Send(item.Line);
         var gap = Math.Clamp(plugin.Config.SecondsBetweenMessages, 1.0f, 10.0f);
         nextAllowed = DateTime.Now.AddSeconds(gap);

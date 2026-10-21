@@ -51,6 +51,7 @@ public class DrinkOrder
     public string World = string.Empty;
     public string Item = string.Empty;
     public int Price;
+    public string Category = "Drinks";
     public string Channel = string.Empty;
     public OrderStatus Status;
     public DateTime? ServedAt;
@@ -199,6 +200,7 @@ public class VenueManager
         plugin.Save();
 
         Log.Insert(0, new VisitEvent { Time = now, Name = g.Name, World = g.World, Entered = true, FirstVisit = first });
+        if (!g.WasHereWhenIArrived) RingDoorbell(g, first, rec.Visits, now);
 
         if (Config.WelcomeEnabled && !g.WasHereWhenIArrived && !IsNoTell(g.Name)
             && now - rec.LastWelcomed > TimeSpan.FromHours(Math.Max(0, Config.WelcomeCooldownHours)))
@@ -212,6 +214,34 @@ public class VenueManager
     }
 
     private readonly List<(DateTime When, string Key, string Line)> pendingWelcomes = new();
+    private DateTime lastBell = DateTime.MinValue;
+
+    private void RingDoorbell(Guest g, bool first, int visits, DateTime now)
+    {
+        if (!Config.DoorbellEnabled) return;
+        if (Config.DoorbellFirstTimersOnly && !first) return;
+        var quiet = now - lastBell < TimeSpan.FromSeconds(Math.Max(0, Config.DoorbellCooldownSeconds));
+        var note = first ? $"{g.Name} walked in -- FIRST VISIT!" : $"{g.Name} walked in (visit #{visits})";
+        if (Config.DoorbellStyle == 3)
+        {
+            // game sound effect through /echo (only you see/hear it)
+            var se = quiet ? string.Empty : $" <se.{Math.Clamp(Config.DoorbellGameSound, 1, 16)}>";
+            if (Config.DoorbellChatNote || se.Length > 0) Chat.Send($"/echo [EVM] {note}{se}");
+        }
+        else
+        {
+            if (!quiet) Doorbell.Ring(Config.DoorbellVolume, Config.DoorbellStyle, Config.DoorbellCustomFile);
+            if (Config.DoorbellChatNote) Plugin.ChatGui.Print($"[EVM] {note}");
+        }
+        if (!quiet) lastBell = now;
+    }
+
+    /// <summary>For the Test button.</summary>
+    public void TestDoorbell()
+    {
+        if (Config.DoorbellStyle == 3) Chat.Send($"/echo [EVM] Doorbell test <se.{Math.Clamp(Config.DoorbellGameSound, 1, 16)}>");
+        else Doorbell.Ring(Config.DoorbellVolume, Config.DoorbellStyle, Config.DoorbellCustomFile);
+    }
 
     private void EndTracking(DateTime now)
     {
@@ -329,7 +359,7 @@ public class VenueManager
             Orders.Add(new DrinkOrder
             {
                 Time = DateTime.Now, Key = key, Name = name, World = world, Channel = channel,
-                Item = item?.Name ?? wanted, Price = item?.Price ?? 0, Status = OrderStatus.Waiting,
+                Item = item?.Name ?? wanted, Price = item?.Price ?? 0, Category = item?.Category ?? "Drinks", Status = OrderStatus.Waiting,
             });
             if (Config.OrderReplyTell) plugin.SendLine($"/tell {Target(name, world)} {Fill(Config.OrderReply, name, item: item?.Name ?? wanted)}");
         }
@@ -371,9 +401,52 @@ public class VenueManager
     public string MenuMessage(string name = "")
         => Config.MenuLink.Trim().Length > 0 ? Fill(Config.MenuLinkMessage, name) : Fill(Config.MenuShout, name, menu: MenuText());
 
+    /// <summary>The emote for this order: the menu item's own emote if it has one, otherwise the drink or food emote.</summary>
+    public string EmoteFor(string item, string category)
+    {
+        var own = Config.Menu.FirstOrDefault(m => m.Name.Equals(item, StringComparison.OrdinalIgnoreCase))?.Emote ?? string.Empty;
+        var e = own.Trim().Length > 0 ? own : IsFood(category) ? Config.FoodEmote : Config.DrinkEmote;
+        e = e.Trim();
+        if (e.Length == 0) return string.Empty;
+        if (!e.StartsWith('/')) e = "/" + e;
+        if (Config.EmoteMotionOnly && !e.EndsWith(" motion", StringComparison.OrdinalIgnoreCase)) e += " motion";
+        return e;
+    }
+
+    private void DoServeEmote(DrinkOrder o)
+    {
+        var emote = EmoteFor(o.Item, o.Category);
+        if (emote.Length == 0) return;
+        // Target the customer the moment the emote goes out (not earlier), so it's aimed at them.
+        plugin.Queue.Enqueue(emote, before: Config.EmoteTargetsCustomer ? () => TargetPlayer(o.Name, o.World) : null);
+    }
+
+    /// <summary>Targets a player standing nearby, so a following emote is aimed at them. Returns false if they aren't around.</summary>
+    public static bool TargetPlayer(string name, string world)
+    {
+        foreach (var obj in Plugin.ObjectTable)
+        {
+            if (obj is not IPlayerCharacter pc || pc.Name.TextValue != name) continue;
+            if (!string.IsNullOrEmpty(world))
+            {
+                var w = string.Empty;
+                try { w = pc.HomeWorld.Value.Name.ExtractText(); } catch { }
+                if (w.Length > 0 && w != world) continue;
+            }
+            Plugin.TargetManager.Target = pc;
+            return true;
+        }
+        return false;
+    }
+
+    public static bool IsFood(string category) => category.Trim().Equals("Food", StringComparison.OrdinalIgnoreCase)
+        || category.Trim().Equals("Snacks", StringComparison.OrdinalIgnoreCase) || category.Trim().Equals("Desserts", StringComparison.OrdinalIgnoreCase);
+
     public string MenuText()
-        => string.Join(" | ", Config.Menu.Where(m => !m.OutOfStock).Select(m => m.Price > 0 ? $"{m.Name} {ShortGil(m.Price)}" : m.Name))
-           + $" -- order with {Config.OrderCommand} <drink>";
+        => string.Join(" // ", Config.Menu.Where(m => !m.OutOfStock)
+               .GroupBy(m => string.IsNullOrWhiteSpace(m.Category) ? "Drinks" : m.Category.Trim())
+               .Select(g => $"{g.Key.ToUpper()}: " + string.Join(", ", g.Select(m => m.Price > 0 ? $"{m.Name} {ShortGil(m.Price)}" : m.Name))))
+           + $" -- order with {Config.OrderCommand} <item>";
 
     public static string ShortGil(int g) => g >= 1_000_000 ? $"{g / 1_000_000.0:0.#}m" : g >= 1000 ? $"{g / 1000.0:0.#}k" : g.ToString();
 
@@ -381,7 +454,72 @@ public class VenueManager
     {
         o.Status = OrderStatus.Served;
         o.ServedAt = DateTime.Now;
-        if (!string.IsNullOrWhiteSpace(Config.ServeLine)) plugin.SendLine(Fill(Config.ServeLine, o.Name, item: o.Item));
+        if (Config.CurrentNight == null) StartNight();
+        Config.CurrentNight!.Sales.Add(new Sale { Time = DateTime.Now, Item = o.Item, Customer = o.Name, Price = o.Price, Category = o.Category });
+        plugin.Save();
+        var line = IsFood(o.Category) ? Config.FoodServeLine : Config.ServeLine;
+        if (!string.IsNullOrWhiteSpace(line)) plugin.SendLine(Fill(line, o.Name, item: o.Item));
+        DoServeEmote(o);
+    }
+
+    // ======================= money / nights =======================
+    public static unsafe long CurrentGil()
+    {
+        try
+        {
+            var im = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
+            return im == null ? -1L : (long)im->GetGil();
+        }
+        catch { return -1; }
+    }
+
+    public void StartNight()
+    {
+        if (Config.CurrentNight != null) return;
+        Config.CurrentNight = new NightReport { Start = DateTime.Now, StartGil = CurrentGil() };
+        plugin.Save();
+    }
+
+    public void EndNight()
+    {
+        var n = Config.CurrentNight;
+        if (n == null) return;
+        n.End = DateTime.Now;
+        n.EndGil = CurrentGil();
+        n.Guests = Config.Visitors.Values.Count(v => v.LastSeen >= n.Start);
+        n.FirstTimers = Config.Visitors.Values.Count(v => v.FirstSeen >= n.Start);
+        Config.Nights.Insert(0, n);
+        Config.CurrentNight = null;
+        plugin.Save();
+    }
+
+    public void AddExtra(string label, string from, long amount)
+    {
+        if (amount == 0) return;
+        if (Config.CurrentNight == null) StartNight();
+        Config.CurrentNight!.Extras.Add(new ExtraIncome { Time = DateTime.Now, Label = label, From = from, Amount = amount });
+        plugin.Save();
+    }
+
+    public string Summary(NightReport n)
+    {
+        var end = n.End ?? DateTime.Now;
+        var hours = end - n.Start;
+        var top = n.Sales.GroupBy(s => s.Item).OrderByDescending(g => g.Count()).Take(3)
+            .Select(g => $"{g.Key} x{g.Count()}");
+        var parts = new List<string>
+        {
+            $"{Config.VenueName} -- {n.Start:ddd MMM d} ({(int)hours.TotalHours}h {hours.Minutes}m)",
+        };
+        foreach (var g in n.Sales.GroupBy(s => string.IsNullOrEmpty(s.Category) ? "Drinks" : s.Category))
+            parts.Add($"{g.Key}: {g.Count()} sold = {g.Sum(s => (long)s.Price):N0} gil");
+        foreach (var g in n.Extras.GroupBy(e => e.Label)) parts.Add($"{g.Key}: {g.Sum(e => e.Amount):N0} gil");
+        parts.Add($"TOTAL: {n.Total:N0} gil");
+        var endGil = n.End == null ? CurrentGil() : n.EndGil;
+        if (n.StartGil >= 0 && endGil >= 0) parts.Add($"Gil on hand changed by {endGil - n.StartGil:+#,0;-#,0;0}");
+        if (top.Any()) parts.Add("Best sellers: " + string.Join(", ", top));
+        if (n.Guests > 0) parts.Add($"Guests: {n.Guests} ({n.FirstTimers} new)");
+        return string.Join("\n", parts);
     }
 
     private bool Listening(XivChatType t, out string channel)

@@ -21,6 +21,8 @@ public class VenueWindow : Window
 
     private string newAd = string.Empty;
     private string newItem = string.Empty;
+    private string newCat = "Drinks";
+    private static readonly string[] Categories = { "Drinks", "Shots", "Food", "Snacks", "Desserts" };
     private int newPrice = 50_000;
     private string newDesc = string.Empty;
     private bool showDoneOrders;
@@ -43,9 +45,11 @@ public class VenueWindow : Window
         var newSongs = V.Songs.Count(s => s.Status == RequestStatus.New);
         if (ImGui.BeginTabItem($"Guests ({V.Guests.Count})###guests")) { DrawGuests(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem($"Bar{(waiting > 0 ? $" ({waiting})" : "")}###bar")) { DrawBar(); ImGui.EndTabItem(); }
+        if (ImGui.BeginTabItem("Money###money")) { DrawMoney(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem($"Songs{(newSongs > 0 ? $" ({newSongs})" : "")}###songs")) { DrawSongs(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("Shouts###ads")) { DrawAds(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("Party Finder###pf")) { DrawPf(); ImGui.EndTabItem(); }
+        if (ImGui.BeginTabItem("Doorbell###bell")) { DrawDoorbell(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("Welcome tells###welcome")) { DrawWelcome(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("Setup###setup")) { DrawSetup(); ImGui.EndTabItem(); }
         ImGui.EndTabBar();
@@ -136,7 +140,7 @@ public class VenueWindow : Window
     private void DrawBar()
     {
         var on = Config.OrdersEnabled;
-        if (ImGui.Checkbox($"Take orders: guests type {Config.OrderCommand} <drink>   ({Config.MenuCommand} sends them the menu)", ref on)) { Config.OrdersEnabled = on; Save(); }
+        if (ImGui.Checkbox($"Take orders: guests type {Config.OrderCommand} <item>   ({Config.MenuCommand} sends them the menu)", ref on)) { Config.OrdersEnabled = on; Save(); }
         ImGui.SetNextItemWidth(-200);
         var link = Config.MenuLink;
         if (ImGui.InputTextWithHint("##menulink", "Paste your menu link here (Carrd, Imgur, Google Doc...)", ref link, 300)) { Config.MenuLink = link.Trim(); Save(); }
@@ -156,8 +160,8 @@ public class VenueWindow : Window
         {
             ImGui.TableSetupColumn("Waiting", ImGuiTableColumnFlags.WidthFixed, 60);
             ImGui.TableSetupColumn("Who", ImGuiTableColumnFlags.WidthFixed, 160);
-            ImGui.TableSetupColumn("Drink", ImGuiTableColumnFlags.WidthStretch, 0);
-            ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 60);
+            ImGui.TableSetupColumn("Order", ImGuiTableColumnFlags.WidthStretch, 0);
+            ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 90);
             ImGui.TableSetupColumn("##b", ImGuiTableColumnFlags.WidthFixed, 120);
             ImGui.TableHeadersRow();
             for (var i = 0; i < list.Count; i++)
@@ -172,12 +176,25 @@ public class VenueWindow : Window
                 ImGui.TableNextColumn();
                 var known = Config.Menu.Any(m => m.Name == o.Item);
                 ImGui.TextColored(known ? Green : Gold, o.Item + (known ? "" : " (not on menu)"));
-                ImGui.TableNextColumn(); ImGui.Text(o.Price > 0 ? VenueManager.ShortGil(o.Price) : "-");
+                ImGui.TableNextColumn();
+                if (o.Status == OrderStatus.Waiting)
+                {
+                    ImGui.SetNextItemWidth(-1);
+                    var pr = o.Price;
+                    if (ImGui.InputInt("##price", ref pr, 0)) o.Price = Math.Max(0, pr);
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Price that will be counted when you press Served.");
+                }
+                else ImGui.Text(o.Price > 0 ? VenueManager.ShortGil(o.Price) : "-");
                 ImGui.TableNextColumn();
                 if (o.Status == OrderStatus.Waiting)
                 {
                     if (ImGui.SmallButton("Served")) V.Serve(o);
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Sends your serve line: " + V.Fill(Config.ServeLine, o.Name, item: o.Item));
+                    if (ImGui.IsItemHovered())
+                    {
+                        var em = V.EmoteFor(o.Item, o.Category);
+                        ImGui.SetTooltip("Sends: " + V.Fill(VenueManager.IsFood(o.Category) ? Config.FoodServeLine : Config.ServeLine, o.Name, item: o.Item)
+                            + (em.Length > 0 ? $"\nthen {em}" + (Config.EmoteTargetsCustomer ? $" at {o.Name}" : "") : ""));
+                    }
                     ImGui.SameLine();
                     if (ImGui.SmallButton("Cancel")) o.Status = OrderStatus.Cancelled;
                 }
@@ -187,11 +204,13 @@ public class VenueWindow : Window
             ImGui.EndTable();
         }
         var served = V.Orders.Where(o => o.Status == OrderStatus.Served).ToList();
-        ImGui.TextColored(Grey, $"Tonight: {served.Count} served, {VenueManager.ShortGil(served.Sum(o => o.Price))} gil in drinks");
+        ImGui.TextColored(Grey, Config.CurrentNight != null
+            ? $"Tonight so far: {Config.CurrentNight.Sales.Count} served, {Config.CurrentNight.Total:N0} gil total (see the Money tab)"
+            : $"{served.Count} served - start a night on the Money tab to keep a running total");
         ImGui.SameLine();
         if (ImGui.SmallButton("Clear finished")) V.Orders.RemoveAll(o => o.Status != OrderStatus.Waiting);
 
-        if (ImGui.CollapsingHeader("Menu"))
+        if (ImGui.CollapsingHeader("Menu (drinks & food)"))
         {
             DrinkItem? del = null;
             for (var i = 0; i < Config.Menu.Count; i++)
@@ -200,26 +219,42 @@ public class VenueWindow : Window
                 ImGui.PushID("m" + i);
                 var oos = m.OutOfStock;
                 if (ImGui.Checkbox("86", ref oos)) { m.OutOfStock = oos; Save(); }
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Out of stock tonight - hidden from the menu and orders.");
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("86 it: out of stock tonight - hidden from the menu and orders.");
+                ImGui.SameLine(); ImGui.SetNextItemWidth(90);
+                if (ImGui.BeginCombo("##c", string.IsNullOrWhiteSpace(m.Category) ? "Drinks" : m.Category))
+                {
+                    foreach (var c in Categories) if (ImGui.Selectable(c, c == m.Category)) { m.Category = c; Save(); }
+                    ImGui.EndCombo();
+                }
                 ImGui.SameLine(); ImGui.SetNextItemWidth(170);
                 var n = m.Name; if (ImGui.InputText("##n", ref n, 60)) { m.Name = n; Save(); }
                 ImGui.SameLine(); ImGui.SetNextItemWidth(110);
                 var p = m.Price; if (ImGui.InputInt("##p", ref p, 0)) { m.Price = Math.Max(0, p); Save(); }
-                ImGui.SameLine(); ImGui.SetNextItemWidth(-60);
+                ImGui.SameLine(); ImGui.SetNextItemWidth(-160);
                 var d = m.Description; if (ImGui.InputText("##d", ref d, 120)) { m.Description = d; Save(); }
+                ImGui.SameLine(); ImGui.SetNextItemWidth(95);
+                var em = m.Emote; if (ImGui.InputTextWithHint("##em", "emote", ref em, 40)) { m.Emote = em; Save(); }
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Optional emote just for this item, e.g. /cheer. Leave blank to use the drink/food emote.");
                 ImGui.SameLine();
                 if (ImGui.SmallButton("Del") && ImGui.GetIO().KeyCtrl) del = m;
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip("Hold Ctrl and click");
                 ImGui.PopID();
             }
             if (del != null) { Config.Menu.Remove(del); Save(); }
-            ImGui.SetNextItemWidth(170); ImGui.InputText("##newn", ref newItem, 60);
-            ImGui.SameLine(); ImGui.SetNextItemWidth(110); ImGui.InputInt("##newp", ref newPrice, 0);
-            ImGui.SameLine(); ImGui.SetNextItemWidth(-90); ImGui.InputText("##newd", ref newDesc, 120);
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Add drink") && newItem.Trim().Length > 0)
+            ImGui.TextColored(Grey, "New item:");
+            ImGui.SetNextItemWidth(90);
+            if (ImGui.BeginCombo("##newc", newCat))
             {
-                Config.Menu.Add(new DrinkItem { Name = newItem.Trim(), Price = Math.Max(0, newPrice), Description = newDesc.Trim() });
+                foreach (var c in Categories) if (ImGui.Selectable(c, c == newCat)) newCat = c;
+                ImGui.EndCombo();
+            }
+            ImGui.SameLine(); ImGui.SetNextItemWidth(170); ImGui.InputTextWithHint("##newn", "name", ref newItem, 60);
+            ImGui.SameLine(); ImGui.SetNextItemWidth(110); ImGui.InputInt("##newp", ref newPrice, 0);
+            ImGui.SameLine(); ImGui.SetNextItemWidth(-80); ImGui.InputTextWithHint("##newd", "description", ref newDesc, 120);
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Add item") && newItem.Trim().Length > 0)
+            {
+                Config.Menu.Add(new DrinkItem { Name = newItem.Trim(), Category = newCat, Price = Math.Max(0, newPrice), Description = newDesc.Trim() });
                 newItem = newDesc = string.Empty; Save();
             }
         }
@@ -231,9 +266,124 @@ public class VenueWindow : Window
             var r = Config.OrderReplyTell;
             if (ImGui.Checkbox("Send a /tell when an order comes in", ref r)) { Config.OrderReplyTell = r; Save(); }
             Text("Order reply  {name} {item}", Config.OrderReply, v => Config.OrderReply = v);
-            Text("Serve line (any chat command, e.g. /em or /say)  {name} {item}", Config.ServeLine, v => Config.ServeLine = v);
+            Text("Serve line for drinks (any chat command, e.g. /em or /say)  {name} {item}", Config.ServeLine, v => Config.ServeLine = v);
+            Text("Serve line for food (Food, Snacks, Desserts)  {name} {item}", Config.FoodServeLine, v => Config.FoodServeLine = v);
+            ImGui.Spacing();
+            ImGui.TextColored(Pink, "Emote when serving");
+            ImGui.TextColored(Grey, "Played right after the serve line, e.g. /cheer, /bow, /beckon, /blowkiss. Leave blank for none.");
+            ImGui.SetNextItemWidth(140);
+            var de = Config.DrinkEmote; if (ImGui.InputTextWithHint("Drinks emote", "/cheer", ref de, 40)) { Config.DrinkEmote = de; Save(); }
+            ImGui.SameLine(); ImGui.SetNextItemWidth(140);
+            var fe = Config.FoodEmote; if (ImGui.InputTextWithHint("Food emote", "/bow", ref fe, 40)) { Config.FoodEmote = fe; Save(); }
+            var tc = Config.EmoteTargetsCustomer;
+            if (ImGui.Checkbox("Target the customer first so the emote is aimed at them", ref tc)) { Config.EmoteTargetsCustomer = tc; Save(); }
+            var mo = Config.EmoteMotionOnly;
+            if (ImGui.Checkbox("Animation only (no emote text in chat)", ref mo)) { Config.EmoteMotionOnly = mo; Save(); }
             Text("Menu link message  {link} {venue}", Config.MenuLinkMessage, v => Config.MenuLinkMessage = v);
             Text("Menu message when there's no link  {menu}", Config.MenuShout, v => Config.MenuShout = v);
+        }
+    }
+
+    // ---------------------------------------------------------------- money
+    private string extraFrom = string.Empty;
+    private int extraAmount = 100_000;
+    private string extraLabel = "Tip";
+    private static readonly string[] ExtraLabels = { "Tip", "Cover charge", "Raffle", "Donation", "Other" };
+    private int openNight = -1;
+
+    private void DrawMoney()
+    {
+        var n = Config.CurrentNight;
+        if (n == null)
+        {
+            ImGui.TextWrapped("Start a night to add up everything the bar takes in: every order you mark Served, plus tips and anything else you add. (Serving an order also starts one automatically.)");
+            if (ImGui.Button("Start tonight")) V.StartNight();
+        }
+        else
+        {
+            var dur = DateTime.Now - n.Start;
+            ImGui.TextColored(Green, $"Night started {n.Start:h:mm tt}  ({(int)dur.TotalHours}h {dur.Minutes}m)");
+            ImGui.TextColored(Gold, $"TOTAL TONIGHT: {n.Total:N0} gil");
+            foreach (var g in n.Sales.GroupBy(s => string.IsNullOrEmpty(s.Category) ? "Drinks" : s.Category))
+                ImGui.Text($"{g.Key}: {g.Count()} sold = {g.Sum(s => (long)s.Price):N0} gil");
+            foreach (var g in n.Extras.GroupBy(e => e.Label)) ImGui.Text($"{g.Key}: {g.Sum(e => e.Amount):N0} gil ({g.Count()})");
+            var gil = VenueManager.CurrentGil();
+            if (n.StartGil >= 0 && gil >= 0)
+                ImGui.TextColored(Grey, $"Your gil on hand: {gil:N0}  ({gil - n.StartGil:+#,0;-#,0;0} since you started - includes anything you spent or paid out)");
+
+            ImGui.Spacing();
+            ImGui.TextColored(Pink, "Add money in");
+            ImGui.SetNextItemWidth(120);
+            if (ImGui.BeginCombo("##xl", extraLabel))
+            {
+                foreach (var l in ExtraLabels) if (ImGui.Selectable(l, l == extraLabel)) extraLabel = l;
+                ImGui.EndCombo();
+            }
+            ImGui.SameLine(); ImGui.SetNextItemWidth(130);
+            ImGui.InputInt("##xa", ref extraAmount, 0);
+            ImGui.SameLine(); ImGui.SetNextItemWidth(140);
+            ImGui.InputTextWithHint("##xf", "from (optional)", ref extraFrom, 40);
+            ImGui.SameLine();
+            if (ImGui.Button("Add")) { V.AddExtra(extraLabel, extraFrom.Trim(), extraAmount); extraFrom = string.Empty; }
+            ImGui.SameLine();
+            if (ImGui.SmallButton("From my target"))
+            {
+                var t = Plugin.TargetManager.Target;
+                if (t != null) extraFrom = t.Name.TextValue;
+            }
+
+            ImGui.Spacing();
+            if (ImGui.Button("Copy summary")) ImGui.SetClipboardText(V.Summary(n));
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Copies tonight's totals so you can paste them in Discord.");
+            ImGui.SameLine();
+            if (ImGui.Button("End night + save") && ImGui.GetIO().KeyCtrl) V.EndNight();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Hold Ctrl and click. Saves tonight to the history below.");
+
+            if (ImGui.CollapsingHeader($"Tonight's entries ({n.Sales.Count + n.Extras.Count})"))
+            {
+                Sale? delS = null; ExtraIncome? delE = null;
+                var rows = n.Sales.Select(s => (s.Time, Text: $"{s.Item} for {s.Customer}", Amount: (long)s.Price, Obj: (object)s))
+                    .Concat(n.Extras.Select(x => (x.Time, Text: x.Label + (x.From.Length > 0 ? $" from {x.From}" : ""), Amount: x.Amount, Obj: (object)x)))
+                    .OrderByDescending(e => e.Time).ToList();
+                for (var i = 0; i < rows.Count; i++)
+                {
+                    var e = rows[i];
+                    ImGui.PushID("row" + i);
+                    if (ImGui.SmallButton("x")) { if (e.Obj is Sale s) delS = s; else delE = (ExtraIncome)e.Obj; }
+                    ImGui.SameLine(); ImGui.TextColored(Grey, e.Time.ToString("h:mm tt"));
+                    ImGui.SameLine(); ImGui.Text($"{e.Text}  -  {e.Amount:N0}");
+                    ImGui.PopID();
+                }
+                if (delS != null) { n.Sales.Remove(delS); Save(); }
+                if (delE != null) { n.Extras.Remove(delE); Save(); }
+            }
+        }
+
+        ImGui.Separator();
+        ImGui.TextColored(Pink, $"Past nights ({Config.Nights.Count})");
+        if (Config.Nights.Count > 0)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Grey, $"all-time total {Config.Nights.Sum(x => x.Total):N0} gil");
+        }
+        for (var i = 0; i < Config.Nights.Count; i++)
+        {
+            var r = Config.Nights[i];
+            ImGui.PushID("night" + i);
+            if (ImGui.Selectable($"{r.Start:ddd MMM d, h:mm tt}   {r.Total:N0} gil   ({r.Sales.Count} orders)", openNight == i)) openNight = openNight == i ? -1 : i;
+            var deleted = false;
+            if (openNight == i)
+            {
+                ImGui.Indent();
+                ImGui.TextWrapped(V.Summary(r));
+                if (ImGui.SmallButton("Copy")) ImGui.SetClipboardText(V.Summary(r));
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Delete") && ImGui.GetIO().KeyCtrl) deleted = true;
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Hold Ctrl and click");
+                ImGui.Unindent();
+            }
+            ImGui.PopID();
+            if (deleted) { Config.Nights.RemoveAt(i); openNight = -1; Save(); break; }
         }
     }
 
@@ -381,6 +531,55 @@ public class VenueWindow : Window
         if (ImGui.Checkbox("Open Party Finder automatically when the warning fires", ref ao)) { Config.PfAutoOpen = ao; Save(); }
         ImGui.Spacing();
         ImGui.TextColored(Grey, "To refresh: Open Party Finder > Recruit Members > Update, then press \"I just posted / updated it\".");
+    }
+
+    // ---------------------------------------------------------------- doorbell
+    private static readonly string[] BellStyles = { "Classic ding-dong", "Soft chime", "Three-note bell", "Game sound effect" };
+
+    private void DrawDoorbell()
+    {
+        var on = Config.DoorbellEnabled;
+        if (ImGui.Checkbox("Ring a doorbell when someone walks into my venue", ref on)) { Config.DoorbellEnabled = on; Save(); }
+        ImGui.TextColored(Grey, "Only you hear it. People already inside when you arrive don't ring it.");
+        ImGui.Spacing();
+
+        ImGui.SetNextItemWidth(200);
+        if (ImGui.BeginCombo("Sound", BellStyles[Math.Clamp(Config.DoorbellStyle, 0, 3)]))
+        {
+            for (var i = 0; i < BellStyles.Length; i++)
+                if (ImGui.Selectable(BellStyles[i], Config.DoorbellStyle == i)) { Config.DoorbellStyle = i; Save(); }
+            ImGui.EndCombo();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Test")) V.TestDoorbell();
+
+        if (Config.DoorbellStyle == 3)
+        {
+            var se = Config.DoorbellGameSound;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.SliderInt("Game sound number", ref se, 1, 16)) { Config.DoorbellGameSound = se; Save(); }
+            ImGui.TextColored(Grey, "Uses the game's own <se.1>-<se.16> sounds, at your in-game volume.");
+        }
+        else
+        {
+            var vol = Config.DoorbellVolume;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.SliderInt("Volume", ref vol, 5, 100, "%d%%")) { Config.DoorbellVolume = vol; Save(); }
+            ImGui.SetNextItemWidth(-1);
+            var path = Config.DoorbellCustomFile;
+            if (ImGui.InputTextWithHint("##bellfile", "Optional: full path to your own .wav file, e.g. C:\\Sounds\\bell.wav", ref path, 300)) { Config.DoorbellCustomFile = path; Save(); }
+            if (Config.DoorbellCustomFile.Trim().Length > 0 && !System.IO.File.Exists(Config.DoorbellCustomFile.Trim().Trim('"')))
+                ImGui.TextColored(Red, "That file wasn't found - the built-in sound will play instead.");
+        }
+
+        ImGui.Spacing();
+        var ft = Config.DoorbellFirstTimersOnly;
+        if (ImGui.Checkbox("Only ring for first-time visitors", ref ft)) { Config.DoorbellFirstTimersOnly = ft; Save(); }
+        var cn = Config.DoorbellChatNote;
+        if (ImGui.Checkbox("Also show \"Name walked in\" in my chat (only I see it)", ref cn)) { Config.DoorbellChatNote = cn; Save(); }
+        var cd = Config.DoorbellCooldownSeconds;
+        ImGui.SetNextItemWidth(100);
+        if (ImGui.InputInt("Seconds between rings (so a group arriving doesn't ring 6 times)", ref cd, 1)) { Config.DoorbellCooldownSeconds = Math.Clamp(cd, 0, 60); Save(); }
     }
 
     // ---------------------------------------------------------------- welcome
